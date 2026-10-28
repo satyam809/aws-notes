@@ -48,6 +48,10 @@ For a production setup, you may instead create a separate `deploy` user, use `/h
 3. Test that the key can sign in as `deploy`.
 4. In GitHub repository secrets, add:
 
+   - Open the GitHub repository, then go to **Settings** > **Secrets and variables** > **Actions**.
+   - Select **New repository secret**, enter the secret name and value below, then choose **Add secret**.
+   - Set `EC2_USER` to `ubuntu` when using the default EC2 user. The workflow will connect as `ubuntu@YOUR_EC2_PUBLIC_IP`.
+
 | Secret | Value |
 | --- | --- |
 | `EC2_HOST` | EC2 public IPv4 address |
