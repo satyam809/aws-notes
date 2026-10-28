@@ -6,6 +6,10 @@
 2. Create and download an RSA `.pem` key pair. Keep it private.
 3. Create these security-group inbound rules:
 
+   - Open **EC2** > **Instances**, select the instance, and open the **Security** tab.
+   - Click the linked security-group name, then choose **Edit inbound rules** > **Add rule**.
+   - Add the following rules and select **Save rules**:
+
 | Type | Port | Source type | Source |
 | --- | --- | --- | --- |
 | SSH | 22 | My IP | Your public IP address |
@@ -20,11 +24,22 @@
 2. Install Nginx, Git, Node.js, and PM2.
 3. Confirm the Nginx page opens at `http://YOUR_EC2_PUBLIC_IP`.
 
-## Step 3: Create a deployment user
+## Step 3: Choose the deployment user and app directory
 
-1. Create a Linux user named `deploy` on EC2.
-2. Create `/home/deploy/apps/YOUR_REPOSITORY`.
-3. Give this user permission to reload Nginx.
+You can use the default `ubuntu` user for a personal or learning project. If you already have `/home/ubuntu/apps`, keep using it; do not move existing apps.
+
+1. Create a separate frontend directory alongside any existing apps:
+
+   ```bash
+   mkdir -p /home/ubuntu/apps/YOUR_FRONTEND_REPOSITORY
+   ```
+
+   For example: `/home/ubuntu/apps/itinerary-management-frontend`.
+
+2. Set the GitHub Actions secret `EC2_USER` to `ubuntu`.
+3. Use `/home/ubuntu/apps/YOUR_FRONTEND_REPOSITORY` in the deployment workflow and Nginx configuration.
+
+For a production setup, you may instead create a separate `deploy` user, use `/home/deploy/apps/YOUR_FRONTEND_REPOSITORY`, and grant that user permission to reload Nginx.
 
 ## Step 4: Set up GitHub Actions SSH access
 
