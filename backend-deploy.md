@@ -1,4 +1,4 @@
-# Deploy NestJS + RDS (no Docker)
+# Deploy NestJS + RDS
 
 > Setup: EC2 runs the backend, RDS runs MySQL, and Nginx is public.
 
