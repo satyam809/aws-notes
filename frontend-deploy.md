@@ -20,7 +20,14 @@ In the **AWS Console**:
 
 1. Open **EC2 → Key Pairs → Create key pair**. Name it `nextjs-ec2-key`, select **RSA** and **.pem**, and store the downloaded key privately.
 2. Open **EC2 → Instances → Launch instances**. Choose **Ubuntu Server 24.04 LTS**, select the key pair, and choose an instance size (a small learning app can start with `t3.micro`).
-3. Create a security group with these inbound rules:
+3. In the security group **Basic details** section, enter:
+
+| Field | Value |
+| --- | --- |
+| **Security group name** | `nextjs-web-sg` |
+| **Description** | `Allow SSH administration and HTTP/HTTPS traffic for Next.js EC2 server` |
+
+4. Add these inbound rules:
 
 | Type | Port | Source | Reason |
 | --- | --- | --- | --- |
