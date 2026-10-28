@@ -6,11 +6,11 @@
 2. Create and download an RSA `.pem` key pair. Keep it private.
 3. Create these security-group inbound rules:
 
-| Type | Port | Source |
-| --- | --- | --- |
-| SSH | 22 | My IP |
-| HTTP | 80 | Anywhere (`0.0.0.0/0`) |
-| HTTPS | 443 | Anywhere (`0.0.0.0/0`) |
+| Type | Port | Source type | Source |
+| --- | --- | --- | --- |
+| SSH | 22 | My IP | Your public IP address |
+| HTTP | 80 | Anywhere-IPv4 | `0.0.0.0/0` |
+| HTTPS | 443 | Anywhere-IPv4 | `0.0.0.0/0` |
 
 4. Copy the instance's public IPv4 address.
 
