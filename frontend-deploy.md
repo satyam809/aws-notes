@@ -103,9 +103,63 @@ This guide uses the existing default `ubuntu` user. The Actions key is separate 
 
 ## Step 6: Configure Nginx
 
-1. Create an Nginx site configuration for the app.
-2. Configure it to forward port `80` requests to `http://127.0.0.1:3000`.
-3. Enable the site, run `sudo nginx -t`, then reload Nginx.
+1. Open a new site configuration file:
+
+   ```bash
+   sudo nano /etc/nginx/sites-available/aws-notes
+   ```
+
+2. Add the following configuration. Replace `YOUR_DOMAIN_OR_IP` with the domain name pointing to the EC2 instance, or with its public IPv4 address:
+
+   ```nginx
+   server {
+       listen 80;
+       server_name YOUR_DOMAIN_OR_IP;
+
+       location / {
+           proxy_pass http://127.0.0.1:3000;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection "upgrade";
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+   }
+   ```
+
+3. Save the file, then enable the site by creating a symbolic link:
+
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/aws-notes /etc/nginx/sites-enabled/
+   ```
+
+4. If the link already exists, update it instead:
+
+   ```bash
+   sudo ln -sf /etc/nginx/sites-available/aws-notes /etc/nginx/sites-enabled/
+   ```
+
+5. Test the Nginx configuration. Fix any reported errors before continuing:
+
+   ```bash
+   sudo nginx -t
+   ```
+
+6. Reload Nginx to apply the configuration:
+
+   ```bash
+   sudo systemctl reload nginx
+   ```
+
+7. Confirm that the app is available through Nginx:
+
+   ```text
+   http://YOUR_DOMAIN_OR_IP
+   ```
+
+   Nginx receives requests on port `80` and forwards them to the frontend running on port `3000`.
 
 ## Step 7: Add the GitHub Actions deployment workflow
 
