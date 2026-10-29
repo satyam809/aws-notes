@@ -39,28 +39,65 @@ You can use the default `ubuntu` user for a personal or learning project. If you
 2. Set the GitHub Actions secret `EC2_USER` to `ubuntu`.
 3. Use `/home/ubuntu/apps/YOUR_FRONTEND_REPOSITORY` in the deployment workflow and Nginx configuration.
 
-For a production setup, you may instead create a separate `deploy` user, use `/home/deploy/apps/YOUR_FRONTEND_REPOSITORY`, and grant that user permission to reload Nginx.
-
 ## Step 4: Set up GitHub Actions SSH access
 
-1. Create a new SSH key only for GitHub Actions. Do not reuse the EC2 `.pem` key.
-2. Add its public key to `/home/deploy/.ssh/authorized_keys` on EC2.
-3. Test that the key can sign in as `deploy`.
-4. In GitHub repository secrets, add:
+This guide uses the existing default `ubuntu` user. The Actions key is separate from the EC2 `.pem` key: the `.pem` key remains for administrator access, while the new key is used only by GitHub Actions deployments.
+
+1. On your local Windows computer, create the GitHub Actions key. Leave the passphrase empty when prompted because GitHub Actions cannot enter it interactively:
+
+   ```powershell
+   ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\github_actions_ec2" -C "github-actions-ec2"
+   ```
+
+   This creates a private key at `C:\Users\YOUR_WINDOWS_USER\.ssh\github_actions_ec2` and a public key ending in `.pub`.
+
+2. Copy the public key from your Windows computer:
+
+   ```powershell
+   Get-Content "$env:USERPROFILE\.ssh\github_actions_ec2.pub"
+   ```
+
+3. On EC2, logged in as `ubuntu`, add that complete one-line public key to the `ubuntu` account's authorized keys:
+
+   ```bash
+   nano ~/.ssh/authorized_keys
+   chmod 700 ~/.ssh
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+   Save the file after pasting the key on a new line. Never put the private key or the EC2 `.pem` key in `authorized_keys`.
+
+4. From your Windows computer, test the new key before adding it to GitHub:
+
+   ```powershell
+   ssh -i "$env:USERPROFILE\.ssh\github_actions_ec2" -o IdentitiesOnly=yes ubuntu@YOUR_EC2_PUBLIC_IP
+   ```
+
+   Run `whoami` after signing in. It must return `ubuntu`.
+
+5. In GitHub repository secrets, add:
 
    - Open the GitHub repository, then go to **Settings** > **Secrets and variables** > **Actions**.
    - Select **New repository secret**, enter the secret name and value below, then choose **Add secret**.
-   - Set `EC2_USER` to `ubuntu` when using the default EC2 user. The workflow will connect as `ubuntu@YOUR_EC2_PUBLIC_IP`.
+   - The workflow will connect as `ubuntu@YOUR_EC2_PUBLIC_IP`.
 
 | Secret | Value |
 | --- | --- |
 | `EC2_HOST` | EC2 public IPv4 address |
-| `EC2_USER` | `deploy` |
+| `EC2_USER` | `ubuntu` |
 | `EC2_SSH_KEY` | Private contents of the GitHub Actions SSH key |
+
+   Copy the private-key value with the following command, then paste the complete output (including the `BEGIN` and `END` lines) as the `EC2_SSH_KEY` secret:
+
+   ```powershell
+   Get-Content -Raw "$env:USERPROFILE\.ssh\github_actions_ec2"
+   ```
+
+6. Ensure the instance security group permits inbound SSH (port `22`) from the GitHub Actions runner. An SSH rule set to **My IP** permits only your own computer and will block GitHub-hosted runners. For a production system, prefer a self-hosted runner or AWS Systems Manager rather than broadly opening SSH access.
 
 ## Step 5: Add production environment variables
 
-1. On EC2, create `/home/deploy/apps/YOUR_REPOSITORY/.env.production`.
+1. On EC2, create `/home/ubuntu/apps/YOUR_REPOSITORY/.env.production`.
 2. Add all production environment variables and secrets there.
 3. Never commit `.env.production` or other secret files to GitHub.
 
