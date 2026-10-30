@@ -106,7 +106,7 @@ This guide uses the existing default `ubuntu` user. The Actions key is separate 
 1. Open a new site configuration file:
 
    ```bash
-   sudo nano /etc/nginx/sites-available/aws-notes
+   sudo nano /etc/nginx/sites-available/itinerary-management-frontend
    ```
 
 2. Add the following configuration. Replace `YOUR_DOMAIN_OR_IP` with the domain name pointing to the EC2 instance, or with its public IPv4 address:
@@ -132,13 +132,13 @@ This guide uses the existing default `ubuntu` user. The Actions key is separate 
 3. Save the file, then enable the site by creating a symbolic link:
 
    ```bash
-   sudo ln -s /etc/nginx/sites-available/aws-notes /etc/nginx/sites-enabled/
+   sudo ln -s /etc/nginx/sites-available/itinerary-management-frontend /etc/nginx/sites-enabled/
    ```
 
 4. If the link already exists, update it instead:
 
    ```bash
-   sudo ln -sf /etc/nginx/sites-available/aws-notes /etc/nginx/sites-enabled/
+   sudo ln -sf /etc/nginx/sites-available/itinerary-management-frontend /etc/nginx/sites-enabled/
    ```
 
 5. Test the Nginx configuration. Fix any reported errors before continuing:
@@ -163,16 +163,96 @@ This guide uses the existing default `ubuntu` user. The Actions key is separate 
 
 ## Step 7: Add the GitHub Actions deployment workflow
 
-1. Create `.github/workflows/deploy.yml` in the project.
-2. Configure it to run when code is pushed to `main`.
-3. The workflow must:
-   - Connect to EC2 using the GitHub secrets.
-   - Download the latest code from `main`.
-   - Run `npm ci`.
-   - Run `npm run build`.
-   - Start or restart the app with PM2 on port `3000`.
-   - Reload Nginx.
-4. Replace every placeholder such as `YOUR_REPOSITORY` and `YOUR_GITHUB_USERNAME`.
+1. Create the directory `.github/workflows` in the project if it does not already exist.
+2. Create `.github/workflows/deploy.yml`.
+3. Add the following workflow:
+
+   ```yaml
+   name: Deploy Frontend to EC2
+
+   on:
+     push:
+       branches:
+         - main
+
+   jobs:
+     deploy:
+       runs-on: ubuntu-latest
+
+       steps:
+         - name: Deploy to EC2
+           uses: appleboy/ssh-action@v1.2.0
+           with:
+             host: ${{ secrets.EC2_HOST }}
+             username: ${{ secrets.EC2_USER }}
+             key: ${{ secrets.EC2_SSH_KEY }}
+             script_stop: true
+             script: |
+               APP_DIR=/home/${{ secrets.EC2_USER }}/apps/itinerary-management-frontend
+
+               if [ -d "$APP_DIR/.git" ]; then
+                 cd "$APP_DIR"
+                 git fetch origin main
+                 git reset --hard origin/main
+               else
+                 mkdir -p /home/${{ secrets.EC2_USER }}/apps
+                 BACKUP_DIR="$APP_DIR.local-backup"
+                 rm -rf "$BACKUP_DIR"
+                 if [ -d "$APP_DIR" ]; then
+                   mv "$APP_DIR" "$BACKUP_DIR"
+                 fi
+                 git clone https://github.com/satyam809/itinerary-management-frontend.git "$APP_DIR"
+                 if [ -d "$BACKUP_DIR" ]; then
+                   find "$BACKUP_DIR" -maxdepth 1 -type f -name '.env*' -exec cp {} "$APP_DIR/" \;
+                   rm -rf "$BACKUP_DIR"
+                 fi
+                 cd "$APP_DIR"
+               fi
+
+               npm ci
+               npm run build
+
+               if pm2 describe itinerary-management-frontend >/dev/null 2>&1; then
+                 PORT=3000 pm2 restart itinerary-management-frontend --update-env
+               else
+                 PORT=3000 pm2 start npm --name itinerary-management-frontend -- start
+               fi
+
+               pm2 save
+               sudo systemctl reload nginx
+   ```
+
+   The workflow works in this order:
+
+   - `on.push.branches.main` runs the workflow only when code is pushed to `main`.
+   - `appleboy/ssh-action` opens an SSH connection to EC2 using the three secrets created in Step 4.
+   - `script_stop: true` stops the remote script when a command fails.
+   - If the repository directory already exists, the workflow downloads the latest commits with `git fetch` and resets it to `origin/main`.
+   - If the directory does not exist or has no `.git` directory, it preserves `.env*` files, then clones `https://github.com/satyam809/itinerary-management-frontend.git`.
+   - `npm ci` installs packages exactly as recorded in `package-lock.json`.
+   - `npm run build` creates the production build.
+   - PM2 starts the app on port `3000` the first time and restarts it on later deployments.
+   - `pm2 save` stores the PM2 process so it can be restored after a reboot.
+   - `sudo systemctl reload nginx` applies Nginx changes and resumes proxying requests to the app.
+
+4. A directory that exists but does not contain `.git` is treated as a new checkout. The workflow moves that directory aside, clones the repository, restores files whose names start with `.env`, and removes the backup. This permits the deployment directory to contain `.env.production` or other environment files before the first deployment.
+
+5. Ensure the repository URL, app name, app directory, and username match your server:
+
+   - GitHub repository URL: replace it if your repository is hosted under a different account or has a different name.
+   - App directory: `/home/ubuntu/apps/itinerary-management-frontend` is used in this example.
+   - PM2 process name: `itinerary-management-frontend` can be changed to a unique application name.
+   - Deployment user: the workflow uses `EC2_USER`, currently expected to be `ubuntu`.
+
+6. Commit the workflow and push it to `main`:
+
+   ```bash
+   git add .github/workflows/deploy.yml
+   git commit -m "Add EC2 deployment workflow"
+   git push origin main
+   ```
+
+7. Open the repository's **Actions** tab in GitHub. The deployment run should show an SSH connection, dependency installation, production build, PM2 update, and Nginx reload.
 
 ## Step 8: Deploy and verify
 
