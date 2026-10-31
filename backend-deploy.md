@@ -18,7 +18,7 @@ Replace the example values before deployment. Existing repository documentation 
 |---|---|
 | Backend directory on EC2 | `/home/ubuntu/apps/itinerary-management-backend` |
 | Backend repository | `https://github.com/satyam809/itinerary-management-backend.git` |
-| PM2 process name | `backend` |
+| PM2 process name | `itinerary-management-backend` |
 | Application port | `3001` |
 | Nginx configuration | `/etc/nginx/sites-available/itinerary-management-backend` |
 
