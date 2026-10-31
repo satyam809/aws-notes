@@ -274,7 +274,7 @@ PORT=3001 node dist/main.js
 Stop the test process with `Ctrl+C`, then configure PM2:
 
 ```bash
-PORT=3001 pm2 start dist/main.js --name backend
+PORT=3001 pm2 start dist/main.js --name itinerary-management-backend
 pm2 save
 pm2 startup systemd
 ```
@@ -284,7 +284,7 @@ Run the exact `sudo env ... pm2 startup systemd` command printed by PM2, then ru
 ```bash
 pm2 save
 pm2 status
-pm2 logs backend --lines 50
+pm2 logs itinerary-management-backend --lines 50
 curl -I http://127.0.0.1:3001
 ```
 
@@ -402,7 +402,7 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=yes "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" 'set -eu
             APP_DIR="/home/${{ secrets.DEPLOY_USER }}/apps/itinerary-management-backend"
-            APP_NAME="backend"
+            APP_NAME="itinerary-management-backend"
             REPOSITORY="https://github.com/satyam809/itinerary-management-backend.git"
 
             if [ -d "$APP_DIR/.git" ]; then
@@ -576,7 +576,7 @@ cd /home/ubuntu/apps/itinerary-management-backend
 git pull --ff-only origin main
 npm ci
 npm run build
-pm2 restart backend --update-env
+pm2 restart itinerary-management-backend --update-env
 pm2 save
 ```
 
