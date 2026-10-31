@@ -1,268 +1,501 @@
 # Deploy a Next.js Frontend to AWS EC2
 
-## Step 1: Create an EC2 server
+This guide deploys a Next.js application through GitHub Actions:
 
-1. In AWS, create an **Ubuntu EC2 instance**.
-2. Create and download an RSA `.pem` key pair. Keep it private.
-3. Create these security-group inbound rules:
+```text
+GitHub push -> GitHub Actions SSH -> Ubuntu EC2 -> Next.js + PM2 -> Nginx :80/:443
+```
 
-   - Open **EC2** > **Instances**, select the instance, and open the **Security** tab.
-   - Click the linked security-group name, then choose **Edit inbound rules** > **Add rule**.
-   - Add the following rules and select **Save rules**:
+The application listens privately on `127.0.0.1:3000`. Nginx is the public reverse proxy. Port `3000` must not be opened in the EC2 security group.
 
-| Type | Port | Source type | Source |
-| --- | --- | --- | --- |
-| SSH | 22 | My IP | Your public IP address |
-| HTTP | 80 | Anywhere-IPv4 | `0.0.0.0/0` |
-| HTTPS | 443 | Anywhere-IPv4 | `0.0.0.0/0` |
+## Values used in this guide
 
-4. Copy the instance's public IPv4 address.
+Replace the example values before deploying. The repository and directory names below match the documentation in this repository:
 
-## Step 2: Connect to EC2 and install software
+| Value | Example |
+|---|---|
+| EC2 public IPv4 | `YOUR_EC2_PUBLIC_IP` |
+| Deployment user | `ubuntu` |
+| Application directory | `/home/ubuntu/apps/itinerary-management-frontend` |
+| Frontend repository | `https://github.com/satyam809/itinerary-management-frontend.git` |
+| PM2 process name | `itinerary-management-frontend` |
+| Nginx configuration | `/etc/nginx/sites-available/itinerary-management-frontend` |
 
-1. SSH into the instance with the `.pem` key.
-2. Install Nginx, Git, Node.js, and PM2.
-3. Confirm the Nginx page opens at `http://YOUR_EC2_PUBLIC_IP`.
+If the frontend repository is different, update every occurrence consistently.
 
-## Step 3: Choose the deployment user and app directory
+# Part A: One-time AWS and server setup
 
-You can use the default `ubuntu` user for a personal or learning project. If you already have `/home/ubuntu/apps`, keep using it; do not move existing apps.
+## 1. Create the Ubuntu EC2 instance
 
-1. Create a separate frontend directory alongside any existing apps:
+1. Launch an Ubuntu 24.04 LTS EC2 instance in the AWS Region where the application will run.
+2. Select an instance type appropriate for the application, for example `t3.small`.
+3. Create an SSH key pair, download the private key, and keep it outside the repository.
+4. Configure the instance security group inbound rules:
 
-   ```bash
-   mkdir -p /home/ubuntu/apps/YOUR_FRONTEND_REPOSITORY
-   ```
+| Type | Port | Source |
+|---|---:|---|
+| SSH | 22 | Your administrator IP, initially |
+| HTTP | 80 | `0.0.0.0/0`, and `::/0` if IPv6 is enabled |
+| HTTPS | 443 | `0.0.0.0/0`, and `::/0` if IPv6 is enabled |
 
-   For example: `/home/ubuntu/apps/itinerary-management-frontend`.
+Do not expose port `3000` or database ports in this frontend security group. Restrict SSH after configuring deployment automation.
 
-2. Set the GitHub Actions secret `EC2_USER` to `ubuntu`.
-3. Use `/home/ubuntu/apps/YOUR_FRONTEND_REPOSITORY` in the deployment workflow and Nginx configuration.
+Connect from Windows PowerShell:
 
-## Step 4: Set up GitHub Actions SSH access
+```powershell
+ssh -i "C:\path\to\your-admin-key.pem" ubuntu@YOUR_EC2_PUBLIC_IP
+```
 
-This guide uses the existing default `ubuntu` user. The Actions key is separate from the EC2 `.pem` key: the `.pem` key remains for administrator access, while the new key is used only by GitHub Actions deployments.
+## 2. Install server software
 
-1. On your local Windows computer, create the GitHub Actions key. Leave the passphrase empty when prompted because GitHub Actions cannot enter it interactively:
+Run the following commands on EC2:
 
-   ```powershell
-   ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\github_actions_ec2" -C "github-actions-ec2"
-   ```
+```bash
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y git nginx curl ca-certificates
 
-   This creates a private key at `C:\Users\YOUR_WINDOWS_USER\.ssh\github_actions_ec2` and a public key ending in `.pub`.
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+sudo npm install -g pm2
 
-2. Copy the public key from your Windows computer:
+node --version
+npm --version
+nginx -v
+pm2 --version
+```
 
-   ```powershell
-   Get-Content "$env:USERPROFILE\.ssh\github_actions_ec2.pub"
-   ```
+Use Node.js 20 unless the frontend declares another supported Node.js version in `package.json` or CI. The Node.js major version used by builds must be the same on the server and in GitHub Actions.
 
-3. On EC2, logged in as `ubuntu`, add that complete one-line public key to the `ubuntu` account's authorized keys:
+Create the application directory:
 
-   ```bash
-   nano ~/.ssh/authorized_keys
-   chmod 700 ~/.ssh
-   chmod 600 ~/.ssh/authorized_keys
-   ```
+```bash
+mkdir -p /home/ubuntu/apps
+```
 
-   Save the file after pasting the key on a new line. Never put the private key or the EC2 `.pem` key in `authorized_keys`.
+Verify the default Nginx page at `http://YOUR_EC2_PUBLIC_IP`.
 
-4. From your Windows computer, test the new key before adding it to GitHub:
+## 3. Configure GitHub access from EC2
 
-   ```powershell
-   ssh -i "$env:USERPROFILE\.ssh\github_actions_ec2" -o IdentitiesOnly=yes ubuntu@YOUR_EC2_PUBLIC_IP
-   ```
+This step is required for a private repository. For a public repository, skip to **Step 4**.
 
-   Run `whoami` after signing in. It must return `ubuntu`.
+1. On EC2, create an SSH key used only to read the repository:
 
-5. In GitHub repository secrets, add:
+```bash
+ssh-keygen -t ed25519 -a 100 -C "frontend-deploy-key" -f ~/.ssh/github_deploy
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/github_deploy
+cat ~/.ssh/github_deploy.pub
+```
 
-   - Open the GitHub repository, then go to **Settings** > **Secrets and variables** > **Actions**.
-   - Select **New repository secret**, enter the secret name and value below, then choose **Add secret**.
-   - The workflow will connect as `ubuntu@YOUR_EC2_PUBLIC_IP`.
+2. In the frontend repository on GitHub, open **Settings** > **Deploy keys**, add the public key, and grant read-only access.
+
+3. Configure GitHub SSH to use the deployment key:
+
+```bash
+nano ~/.ssh/config
+```
+
+Add:
+
+```text
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github_deploy
+    IdentitiesOnly yes
+```
+
+Secure the configuration and verify the host and key:
+
+```bash
+chmod 600 ~/.ssh/config
+ssh-keyscan github.com >> ~/.ssh/known_hosts
+chmod 600 ~/.ssh/known_hosts
+ssh -T git@github.com
+```
+
+4. Clone with SSH:
+
+```bash
+cd /home/ubuntu/apps
+git clone git@github.com:satyam809/itinerary-management-frontend.git
+cd itinerary-management-frontend
+```
+
+Use the repository's actual owner and name everywhere. For a public repository, clone over HTTPS:
+
+```bash
+cd /home/ubuntu/apps
+git clone https://github.com/satyam809/itinerary-management-frontend.git
+cd itinerary-management-frontend
+```
+
+## 4. Create SSH access for GitHub Actions
+
+Use a separate deployment key rather than the administrator `.pem` key. Create it from Windows PowerShell:
+
+```powershell
+ssh-keygen -t ed25519 -a 100 -f "$env:USERPROFILE\.ssh\github_actions_ec2" -C "github-actions-ec2"
+Get-Content "$env:USERPROFILE\.ssh\github_actions_ec2.pub"
+```
+
+On EC2, add the complete public key as a new line in the `ubuntu` user's authorized keys file:
+
+```bash
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+nano ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+ssh-keygen -lf ~/.ssh/authorized_keys
+```
+
+Test the key locally before storing the private key in GitHub:
+
+```powershell
+ssh -i "$env:USERPROFILE\.ssh\github_actions_ec2" -o IdentitiesOnly=yes ubuntu@YOUR_EC2_PUBLIC_IP
+```
+
+Add these repository **Actions secrets** under **Settings** > **Secrets and variables** > **Actions**:
 
 | Secret | Value |
-| --- | --- |
+|---|---|
 | `EC2_HOST` | EC2 public IPv4 address |
 | `EC2_USER` | `ubuntu` |
-| `EC2_SSH_KEY` | Private contents of the GitHub Actions SSH key |
+| `EC2_SSH_KEY` | Complete private key, including BEGIN and END lines |
 
-   Copy the private-key value with the following command, then paste the complete output (including the `BEGIN` and `END` lines) as the `EC2_SSH_KEY` secret:
+Read the private key in PowerShell with:
 
-   ```powershell
-   Get-Content -Raw "$env:USERPROFILE\.ssh\github_actions_ec2"
-   ```
+```powershell
+Get-Content -Raw "$env:USERPROFILE\.ssh\github_actions_ec2"
+```
 
-6. Ensure the instance security group permits inbound SSH (port `22`) from the GitHub Actions runner. An SSH rule set to **My IP** permits only your own computer and will block GitHub-hosted runners. For a production system, prefer a self-hosted runner or AWS Systems Manager rather than broadly opening SSH access.
+GitHub-hosted runners use changing public IP addresses. Restricting SSH to your workstation will block them. Use a self-hosted Actions runner on a controlled network, allow only documented GitHub Actions ranges, or temporarily use a tightly managed runner-IP rule. Do not open SSH to `0.0.0.0/0`. Monitor and restore the restriction after deployment troubleshooting.
 
-## Step 5: Add production environment variables
+## 5. Configure production environment variables
 
-1. On EC2, create `/home/ubuntu/apps/YOUR_REPOSITORY/.env.production`.
-2. Add all production environment variables and secrets there.
-3. Never commit `.env.production` or other secret files to GitHub.
+Create `/home/ubuntu/apps/itinerary-management-frontend/.env.production` only on EC2:
 
-## Step 6: Configure Nginx
+```bash
+cd /home/ubuntu/apps/itinerary-management-frontend
+nano .env.production
+chmod 600 .env.production
+```
 
-1. Open a new site configuration file:
+Use the exact variable names required by the frontend. Public browser variables must start with `NEXT_PUBLIC_` and are compiled into the browser bundle during the build. Never put passwords or tokens in `NEXT_PUBLIC_*` variables.
 
-   ```bash
-   sudo nano /etc/nginx/sites-available/itinerary-management-frontend
-   ```
+Example only:
 
-2. Add the following configuration. Replace `YOUR_DOMAIN_OR_IP` with the domain name pointing to the EC2 instance, or with its public IPv4 address:
+```env
+NODE_ENV=production
+NEXT_PUBLIC_API_URL=https://api.example.com
+```
 
-   ```nginx
-   server {
-       listen 80;
-       server_name YOUR_DOMAIN_OR_IP;
+Add server-only variables to the same file, but review the frontend source to identify every required name. Do not commit `.env`, `.env.production`, private keys, or credentials. Add ignored secret files to `.gitignore`:
 
-       location / {
-           proxy_pass http://127.0.0.1:3000;
-           proxy_http_version 1.1;
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection "upgrade";
-           proxy_set_header Host $host;
-           proxy_set_header X-Real-IP $remote_addr;
-           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-           proxy_set_header X-Forwarded-Proto $scheme;
-       }
-   }
-   ```
+```gitignore
+.env
+.env.local
+.env.production
+.env.*.local
+```
 
-3. Save the file, then enable the site by creating a symbolic link:
+## 6. Configure Nginx
 
-   ```bash
-   sudo ln -s /etc/nginx/sites-available/itinerary-management-frontend /etc/nginx/sites-enabled/
-   ```
+Create `/etc/nginx/sites-available/itinerary-management-frontend`:
 
-4. If the link already exists, update it instead:
+```bash
+sudo nano /etc/nginx/sites-available/itinerary-management-frontend
+```
 
-   ```bash
-   sudo ln -sf /etc/nginx/sites-available/itinerary-management-frontend /etc/nginx/sites-enabled/
-   ```
+Replace `YOUR_DOMAIN_OR_IP` with the domain or IP that serves the application:
 
-5. Test the Nginx configuration. Fix any reported errors before continuing:
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name YOUR_DOMAIN_OR_IP;
 
-   ```bash
-   sudo nginx -t
-   ```
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
 
-6. Reload Nginx to apply the configuration:
+Enable the site and remove the conflicting default site:
 
-   ```bash
-   sudo systemctl reload nginx
-   ```
+```bash
+sudo ln -s /etc/nginx/sites-available/itinerary-management-frontend /etc/nginx/sites-enabled/itinerary-management-frontend
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl enable nginx
+sudo systemctl reload nginx
+```
 
-7. Confirm that the app is available through Nginx:
+For IP-based testing, set the listening `server_name` to `_` or the EC2 address. A domain is recommended for TLS.
 
-   ```text
-   http://YOUR_DOMAIN_OR_IP
-   ```
+## 7. Configure PM2 startup
 
-   Nginx receives requests on port `80` and forwards them to the frontend running on port `3000`.
+Build and start the application once:
 
-## Step 7: Add the GitHub Actions deployment workflow
+```bash
+cd /home/ubuntu/apps/itinerary-management-frontend
+npm ci
+npm run build
+PORT=3000 pm2 start npm --name itinerary-management-frontend -- start
+pm2 save
+pm2 startup systemd
+```
 
-1. Create the directory `.github/workflows` in the project if it does not already exist.
-2. Create `.github/workflows/deploy.yml`.
-3. Add the following workflow:
+Run the exact `sudo env ... pm2 startup systemd` command printed by PM2. Then save and verify:
 
-   ```yaml
-   name: Deploy Frontend to EC2
+```bash
+pm2 save
+pm2 status
+curl -I http://127.0.0.1:3000
+```
 
-   on:
-     push:
-       branches:
-         - main
+The frontend must be `online`. If the project's Next.js version documents webpack builds, use `npm run build -- --webpack` consistently in this guide and workflow only after confirming the installed Next.js CLI supports that option.
 
-   jobs:
-     deploy:
-       runs-on: ubuntu-latest
+# Part B: Automated deployment
 
-       steps:
-         - name: Deploy to EC2
-           uses: appleboy/ssh-action@v1.2.0
-           with:
-             host: ${{ secrets.EC2_HOST }}
-             username: ${{ secrets.EC2_USER }}
-             key: ${{ secrets.EC2_SSH_KEY }}
-             script_stop: true
-             script: |
-               APP_DIR=/home/${{ secrets.EC2_USER }}/apps/itinerary-management-frontend
+## 8. Add the GitHub Actions workflow
 
-               if [ -d "$APP_DIR/.git" ]; then
-                 cd "$APP_DIR"
-                 git fetch origin main
-                 git reset --hard origin/main
-               else
-                 mkdir -p /home/${{ secrets.EC2_USER }}/apps
-                 BACKUP_DIR="$APP_DIR.local-backup"
-                 rm -rf "$BACKUP_DIR"
-                 if [ -d "$APP_DIR" ]; then
-                   mv "$APP_DIR" "$BACKUP_DIR"
-                 fi
-                 git clone https://github.com/satyam809/itinerary-management-frontend.git "$APP_DIR"
-                 if [ -d "$BACKUP_DIR" ]; then
-                   find "$BACKUP_DIR" -maxdepth 1 -type f -name '.env*' -exec cp {} "$APP_DIR/" \;
-                   rm -rf "$BACKUP_DIR"
-                 fi
-                 cd "$APP_DIR"
-               fi
+Create `.github/workflows/deploy.yml` in the frontend repository, then add:
 
-               npm ci
-               npm run build
+```yaml
+name: Deploy frontend to EC2
 
-               if pm2 describe itinerary-management-frontend >/dev/null 2>&1; then
-                 PORT=3000 pm2 restart itinerary-management-frontend --update-env
-               else
-                 PORT=3000 pm2 start npm --name itinerary-management-frontend -- start
-               fi
+on:
+  push:
+    branches: [main]
 
-               pm2 save
-               sudo systemctl reload nginx
-   ```
+permissions:
+  contents: read
 
-   The workflow works in this order:
+concurrency:
+  group: frontend-production
+  cancel-in-progress: false
 
-   - `on.push.branches.main` runs the workflow only when code is pushed to `main`.
-   - `appleboy/ssh-action` opens an SSH connection to EC2 using the three secrets created in Step 4.
-   - `script_stop: true` stops the remote script when a command fails.
-   - If the repository directory already exists, the workflow downloads the latest commits with `git fetch` and resets it to `origin/main`.
-   - If the directory does not exist or has no `.git` directory, it preserves `.env*` files, then clones `https://github.com/satyam809/itinerary-management-frontend.git`.
-   - `npm ci` installs packages exactly as recorded in `package-lock.json`.
-   - `npm run build` creates the production build.
-   - PM2 starts the app on port `3000` the first time and restarts it on later deployments.
-   - `pm2 save` stores the PM2 process so it can be restored after a reboot.
-   - `sudo systemctl reload nginx` applies Nginx changes and resumes proxying requests to the app.
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
-4. A directory that exists but does not contain `.git` is treated as a new checkout. The workflow moves that directory aside, clones the repository, restores files whose names start with `.env`, and removes the backup. This permits the deployment directory to contain `.env.production` or other environment files before the first deployment.
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -eu
 
-5. Ensure the repository URL, app name, app directory, and username match your server:
+            APP_DIR="/home/${{ secrets.EC2_USER }}/apps/itinerary-management-frontend"
+            APP_NAME="itinerary-management-frontend"
+            REPOSITORY="https://github.com/satyam809/itinerary-management-frontend.git"
 
-   - GitHub repository URL: replace it if your repository is hosted under a different account or has a different name.
-   - App directory: `/home/ubuntu/apps/itinerary-management-frontend` is used in this example.
-   - PM2 process name: `itinerary-management-frontend` can be changed to a unique application name.
-   - Deployment user: the workflow uses `EC2_USER`, currently expected to be `ubuntu`.
+            mkdir -p "$(dirname "$APP_DIR")"
 
-6. Commit the workflow and push it to `main`:
+            if [ -d "$APP_DIR/.git" ]; then
+              cd "$APP_DIR"
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              if [ -d "$APP_DIR" ]; then
+                mv "$APP_DIR" "$APP_DIR.local-backup"
+              fi
+              git clone "$REPOSITORY" "$APP_DIR"
+              cd "$APP_DIR"
+              if [ -d "$APP_DIR.local-backup" ]; then
+                for file in "$APP_DIR.local-backup"/.env*; do
+                  [ -f "$file" ] && cp "$file" "$APP_DIR/"
+                done
+                rm -rf "$APP_DIR.local-backup"
+              fi
+            fi
 
-   ```bash
-   git add .github/workflows/deploy.yml
-   git commit -m "Add EC2 deployment workflow"
-   git push origin main
-   ```
+            npm ci
+            npm run build
 
-7. Open the repository's **Actions** tab in GitHub. The deployment run should show an SSH connection, dependency installation, production build, PM2 update, and Nginx reload.
+            if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+              PORT=3000 pm2 restart "$APP_NAME" --update-env
+            else
+              PORT=3000 pm2 start npm --name "$APP_NAME" -- start
+            fi
 
-## Step 8: Deploy and verify
+            sleep 5
+            curl --fail --silent --show-error --max-time 20 http://127.0.0.1:3000 >/dev/null
+            pm2 save
+            sudo systemctl reload nginx
+```
 
-1. Commit and push the workflow to the `main` branch.
-2. Open the **Actions** tab in GitHub and confirm the deployment succeeds.
-3. Run PM2 startup configuration once so the app starts after an EC2 reboot.
-4. Open `http://YOUR_EC2_PUBLIC_IP` and confirm that the frontend works.
+Make the repository URL an SSH URL for private repositories when the EC2 deploy key is configured. Do not put the private deploy key in GitHub Actions.
 
-## Important
+The workflow works as follows:
 
-- Do not open port `3000` in the EC2 security group.
-- Do not share or commit private keys, `.pem` files, or `.env.production`.
-- For a custom domain, point its DNS `A` record to the EC2 public IP, then add HTTPS with Certbot.
+- Deployments run only for pushes to `main`.
+- Concurrent deployments are serialized and an active deployment is not canceled.
+- The server pulls the commit directly, so GitHub does not upload build artifacts.
+- Existing `.env*` files remain on the server during initial setup.
+- Dependencies are installed exactly from `package-lock.json` with `npm ci`.
+- The health check runs before Nginx reloads.
+
+## 9. Deploy and verify
+
+Commit and push the workflow:
+
+```bash
+git add .github/workflows/deploy.yml
+git commit -m "Add production deployment workflow"
+git push origin main
+```
+
+In the frontend repository, open **Actions** and confirm the run completes successfully. On EC2, run:
+
+```bash
+pm2 status
+pm2 logs itinerary-management-frontend --lines 50
+sudo ss -lntp | grep ':3000'
+curl -I http://127.0.0.1:3000
+curl -I http://127.0.0.1
+curl -I http://YOUR_EC2_PUBLIC_IP
+```
+
+Open `http://YOUR_EC2_PUBLIC_IP` in a browser and test a client-side route and server-rendered route if present.
+
+## 10. Add a domain and HTTPS
+
+1. Create a DNS `A` record from the domain to the EC2 public IPv4 address. Use IPv6 only when EC2 networking and security rules support it.
+2. Update `server_name` in the Nginx configuration to include the domain.
+3. Install and run Certbot:
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d YOUR_DOMAIN
+sudo certbot renew --dry-run
+```
+
+4. Confirm HTTPS works and the certificate renews:
+
+```bash
+curl -I https://YOUR_DOMAIN
+sudo nginx -t
+```
+
+Use an Elastic IP to keep the public address stable, and update DNS if the instance address changes.
+
+# Verification and troubleshooting
+
+## Process and application checks
+
+```bash
+pm2 status
+pm2 logs itinerary-management-frontend --lines 100
+sudo ss -lntp | grep -E ':3000|:80|:443'
+curl -I http://127.0.0.1:3000
+```
+
+## Nginx returns 502 Bad Gateway
+
+1. Confirm PM2 and port `3000`:
+
+```bash
+pm2 status
+sudo ss -lntp | grep ':3000'
+curl -v http://127.0.0.1:3000
+```
+
+2. Inspect application errors and restart:
+
+```bash
+pm2 logs itinerary-management-frontend --lines 100
+pm2 restart itinerary-management-frontend --update-env
+pm2 save
+```
+
+3. Validate and reload Nginx:
+
+```bash
+sudo nginx -t
+sudo nginx -T | grep -A20 'server_name'
+sudo systemctl reload nginx
+```
+
+## Nginx returns 403 or the wrong site
+
+List enabled configurations and remove duplicate sites that use the same domain:
+
+```bash
+sudo ls -la /etc/nginx/sites-enabled
+sudo nginx -T | grep -n 'server_name'
+sudo nginx -t
+```
+
+## The production build fails
+
+```bash
+cd /home/ubuntu/apps/itinerary-management-frontend
+rm -rf .next
+npm run build
+```
+
+Only if the installed Next.js version supports it, try webpack explicitly:
+
+```bash
+npm run build -- --webpack
+```
+
+Before starting Next.js, confirm that the build output exists:
+
+```bash
+ls -la .next
+```
+
+If the instance runs out of memory, prefer enough production memory or temporary swap. Verify that GitHub Actions and EC2 use the same supported Node major version.
+
+## Deployment permissions or SSH fails
+
+```bash
+ssh -vvv -i "C:\path\to\github_actions_ec2" -o IdentitiesOnly=yes ubuntu@YOUR_EC2_PUBLIC_IP
+```
+
+Confirm the public key belongs to `EC2_SSH_KEY`, then inspect permissions:
+
+```bash
+cat ~/.ssh/authorized_keys
+stat -c '%a %U %G %n' ~/.ssh ~/.ssh/authorized_keys
+```
+
+Expected permissions are `700` for `~/.ssh` and `600` for `authorized_keys`. Inspect the EC2 security group and verify that runner traffic can reach port `22`.
+
+## PM2 does not survive reboot
+
+```bash
+pm2 startup systemd
+pm2 save
+sudo systemctl status pm2-ubuntu
+pm2 resurrect
+```
+
+Run the exact `sudo` command printed by `pm2 startup systemd`; do not copy a stale startup command.
+
+## Security checklist before production
+
+- Keep SSH restricted to known administrator addresses and deployment runners.
+- Do not expose port `3000` publicly or commit private keys.
+- Use repository Deploy Keys instead of personal access tokens for private repositories.
+- Keep `.env.production` owned by `ubuntu` with mode `600`.
+- Keep Nginx and Node.js packages patched and use supported Node.js releases.
+- Protect the `main` branch and the production Actions environment.
+- Do not add AWS administrator credentials to GitHub or EC2 for this SSH deployment.
+- Test firewall, Nginx, PM2, HTTPS, and application health after infrastructure changes.
