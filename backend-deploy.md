@@ -21,7 +21,13 @@ Launch Ubuntu 24.04 and configure the EC2 security group:
 | HTTP | 80 | `0.0.0.0/0` |
 | HTTPS | 443 | `0.0.0.0/0` |
 
-Do not expose port `3001`.
+For the recommended deployment, keep application traffic behind Nginx on ports `80`/`443` and do not expose port `3001` publicly. During direct API testing from a fixed client IP, you may temporarily add this rule, then remove it after verification:
+
+| Type | Protocol | Port range | Source |
+|---|---|---:|---|
+| Custom TCP | TCP | `3001` | Your fixed public IP (for example, `203.0.113.10/32`) |
+
+Do not use `0.0.0.0/0` for port `3001`. That would expose NestJS directly to the internet. Port `3001` should remain private under normal operation, and direct access should use HTTPS whenever exposure is required on an ongoing basis.
 
 ```powershell
 ssh -i "C:\path\to\your-admin-key.pem" ubuntu@YOUR_EC2_PUBLIC_IP
